@@ -1,68 +1,116 @@
 from transformers import AutoTokenizer
 import pandas as pd
 import re
+import matplotlib.pyplot as plt
 
-def min_preprocess(text):
-    # replace \n with space
+# ── Constants ────────────────────────────────────────────────────────────────
+MODEL_NAME = "indobenchmark/indobert-large-p1"
+DATASET_PATH = "datasets/raw_tickets.csv"
+COLUMN_NAME = "DESKRIPSI"
+MAX_TOKENS = 512
+
+
+# ── Preprocessing ─────────────────────────────────────────────────────────────
+def min_preprocess(text: str) -> str:
+    """Minimal preprocessing: normalize whitespace and lowercase."""
     text = re.sub(r'\n+', ' ', text)
-    # case folding
     text = text.lower()
-    # masking url with tautan
-    # text = re.sub(r'http\S+', 'tautan', text)
+    # text = re.sub(r'http\S+', 'tautan', text)  # URL masking (disabled)
     return text
 
-# Initialize the tokenizer using indobenchmark/indobert-large-p1
-tokenizer = AutoTokenizer.from_pretrained("indobenchmark/indobert-large-p1")
 
-# load the dataset from the csv file, use only the "DESKRIPSI" column
-df = pd.read_csv("datasets/raw_tickets.csv")
-descriptions = df["DESKRIPSI"].tolist()
+# ── Stats Helpers ─────────────────────────────────────────────────────────────
+def print_word_stats(descriptions: list[str]) -> None:
+    """Print word count statistics for a list of descriptions."""
+    word_counts = [len(d.split()) for d in descriptions]
+    print(f"Total descriptions      : {len(descriptions)}")
+    print(f"Max words               : {max(word_counts)}")
+    print(f"Min words               : {min(word_counts)}")
+    print(f"Average words           : {sum(word_counts) / len(word_counts):.2f}")
 
-# print total descriptions
-total_descriptions = len(descriptions)
-print(f"Total descriptions: {total_descriptions}")
 
-# print max words in the descriptions
-max_words = max(len(desc.split()) for desc in descriptions)
-print(f"Maximum number of words in the descriptions: {max_words}")
+def print_token_stats(token_counts: list[int], total: int) -> None:
+    """Print token count statistics."""
+    count_exceeding = sum(1 for c in token_counts if c > MAX_TOKENS)
+    print(f"Total tokens            : {sum(token_counts)}")
+    print(f"Max tokens              : {max(token_counts)}")
+    print(f"Min tokens              : {min(token_counts)}")
+    print(f"Average tokens          : {sum(token_counts) / total:.2f}")
+    print(f"Exceeds {MAX_TOKENS} tokens   : {count_exceeding}/{total}")
 
-# print min words in the descriptions
-min_words = min(len(desc.split()) for desc in descriptions)
-print(f"Minimum number of words in the descriptions: {min_words}")
 
-# print average words in the descriptions
-average_words = sum(len(desc.split()) for desc in descriptions) / total_descriptions
-print(f"Average number of words in the descriptions: {average_words:.2f}")
+def print_long_descriptions(descriptions: list[str], token_counts: list[int]) -> None:
+    """Print descriptions that exceed the MAX_TOKENS limit."""
+    long_items = [(i, c) for i, c in enumerate(token_counts) if c > MAX_TOKENS]
+    if not long_items:
+        print("No descriptions exceed 512 tokens.")
+        return
 
-# preprocess each description
-descriptions = [min_preprocess(desc) for desc in descriptions]
+    print(f"\nDescriptions exceeding {MAX_TOKENS} tokens:")
+    for i, count in long_items:
+        print(f"  [{i + 1}] Tokens: {count}\n  {descriptions[i]}\n")
 
-# check the number of tokens in each description
-token_ids = [tokenizer.encode(desc, add_special_tokens=True) for desc in descriptions]
-token_counts = [len(ids) for ids in token_ids]
 
-# print total descriptions with more than 512 tokens so it will be look like this: "Total descriptions with more than 512 tokens: 10/{total_descriptions}"
-count_exceeding = sum(1 for count in token_counts if count > 512)
-total_descriptions = len(descriptions)
-print(f"Total descriptions with more than 512 tokens: {count_exceeding}/{total_descriptions}")
+# ── Visualization ─────────────────────────────────────────────────────────────
+def plot_boxplots(descriptions: list[str], token_counts: list[int]) -> None:
+    """Plot word and token distribution boxplots side by side."""
+    word_counts = [len(d.split()) for d in descriptions]
 
-# print average number of tokens in the descriptions
-average_tokens = sum(token_counts) / total_descriptions
-print(f"Average number of tokens in the descriptions: {average_tokens:.2f}")
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    fig.suptitle("Distribution of Words and Tokens", fontsize=14, fontweight="bold")
 
-# print maximum number of tokens in the descriptions
-max_tokens = max(token_counts)
-print(f"Maximum number of tokens in the descriptions: {max_tokens}")
+    for ax, data, label, color, threshold in [
+        (axes[0], word_counts,  "Word Count",  "steelblue",  None),
+        (axes[1], token_counts, "Token Count", "darkorange", MAX_TOKENS),
+    ]:
+        bp = ax.boxplot(data, patch_artist=True, widths=0.4,
+                        medianprops=dict(color="white", linewidth=2))
+        bp["boxes"][0].set_facecolor(color)
+        if threshold:
+            ax.axhline(threshold, color="red", linestyle="--", linewidth=1.2, label=f"Limit ({threshold})")
+            ax.legend()
+        ax.set_ylabel(label)
+        ax.set_title(f"{label} Distribution")
+        ax.set_xticks([])
+        ax.grid(axis="y", linestyle="--", alpha=0.5)
 
-# print minimum number of tokens in the descriptions
-min_tokens = min(token_counts)
-print(f"Minimum number of tokens in the descriptions: {min_tokens}")
+    plt.tight_layout()
+    plt.savefig("distribution_boxplot.png", dpi=150)
+    plt.show()
+    print("Boxplot saved to distribution_boxplot.png")
 
-# print the descriptions with more than 512 tokens
-if count_exceeding > 0:
-    print("\nDescriptions with more than 512 tokens:")
-    for i, count in enumerate(token_counts):
-        if count > 512:
-            print(f"Description {i+1} (Tokens: {count}): {descriptions[i]}\n")
-else:
-    print("No descriptions exceed 512 tokens.")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+def main() -> None:
+    # Load dataset
+    df = pd.read_csv(DATASET_PATH)
+    descriptions = df[COLUMN_NAME].tolist()
+
+    # Word-level stats (before preprocessing)
+    print("── Word Stats (raw) ──────────────────────────────")
+    print_word_stats(descriptions)
+
+    # Preprocess
+    descriptions = [min_preprocess(d) for d in descriptions]
+
+    # Tokenize
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    token_counts = [
+        len(tokenizer.encode(d, add_special_tokens=True))
+        for d in descriptions
+    ]
+
+    # Token-level stats
+    print("\n── Token Stats ───────────────────────────────────")
+    print_token_stats(token_counts, len(descriptions))
+
+    # Show long descriptions
+    print()
+    print_long_descriptions(descriptions, token_counts)
+
+    # Plot boxplots
+    plot_boxplots(descriptions, token_counts)
+
+
+if __name__ == "__main__":
+    main()

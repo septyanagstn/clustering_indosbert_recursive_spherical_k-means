@@ -24,7 +24,7 @@ preprocessed_data = [re.sub(r'\n+', '. ', desc) for desc in preprocessed_data]
 preprocessed_data = [desc.lower() for desc in preprocessed_data]
 
 # 3. masking url with tautan
-preprocessed_data = [re.sub(r'http\S+', 'tautan', desc) for desc in preprocessed_data]
+preprocessed_data = [re.sub(r'http\S+', ' ', desc) for desc in preprocessed_data]
 
 # 4. masking account mention with nama orang
 preprocessed_data = [re.sub(r'@\w+', 'nama orang', desc) for desc in preprocessed_data]
