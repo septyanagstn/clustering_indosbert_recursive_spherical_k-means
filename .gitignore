@@ -1,4 +1,8 @@
 # dataset
+dataset_0/
+*.csv
+*.json
+*.xml
 dataset/
 *.csv
 *.json
