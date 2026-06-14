@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 MODEL_NAME = "indobenchmark/indobert-large-p1"
 DATASET_PATH = "datasets/raw_tickets.csv"
 COLUMN_NAME = "DESKRIPSI"
-MAX_TOKENS = 512
+MAX_TOKENS = 256
 
 
 # ── Preprocessing ─────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ def min_preprocess(text: str) -> str:
     """Minimal preprocessing: normalize whitespace and lowercase."""
     text = re.sub(r'\n+', ' ', text)
     text = text.lower()
-    # text = re.sub(r'http\S+', 'tautan', text)  # URL masking (disabled)
+    text = re.sub(r'http\S+', 'tautan', text)  # URL masking (disabled)
     return text
 
 
