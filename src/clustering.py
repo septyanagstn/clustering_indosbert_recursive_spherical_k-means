@@ -1,3 +1,4 @@
+import math
 import os
 import numpy as np
 import pandas as pd
@@ -7,45 +8,43 @@ from wordcloud import WordCloud
 from sklearn.metrics import silhouette_score
 
 class RecursiveSphericalKMeans:
-    def __init__(self, d, min_k=2, max_k=10, niter=20):
+    def __init__(self, d, min_k=2, max_k=10, niter=20, generate_wc_l1=True, generate_wc_l2=False):
         """
-        Inisialisasi model Recursive Spherical K-Means.
-        
         Parameter:
-        d (int): Dimensi fitur dari vektor embedding (IndoSBERT = 1024).
-        min_k (int): Batas bawah pencarian jumlah klaster k (Skenario = 2).
-        max_k (int): Batas atas pencarian jumlah klaster k (Skenario = 10).
-        niter (int): Jumlah iterasi maksimum untuk FAISS K-Means.
+        d (int): Dimensi fitur embedding — 256 untuk denaya/indoSBERT-large.
+        min_k (int): Batas bawah jumlah klaster (default 2).
+        max_k (int): Batas atas jumlah klaster (default 10).
+        niter (int): Iterasi maksimum FAISS K-Means.
+        generate_wc_l1 (bool): Apakah ingin menghasilkan Word Cloud untuk level 1 (default True).
+        generate_wc_l2 (bool): Apakah ingin menghasilkan Word Cloud untuk level 2 (default False).
         """
         self.d = d
         self.k_range = list(range(min_k, max_k + 1))
         self.niter = niter
         self.total_runs = 0
         self.results = {}
+        self.generate_wc_l1 = generate_wc_l1
+        self.generate_wc_l2 = generate_wc_l2
         
-        # STOPWORDS UNTUK KATA MASKING (Agar Word Cloud Bersih dari Residu Preprocessing)
         self.masking_stopwords = {
-            'tautan', 'sapaan', 'surel', 'nama', 'orang', 
+            'tautan', 'sapaan', 'surel', 'nama', 'orang',
             'klien', 'client', 'clien', 'isu'
         }
         
-        # Membuat folder untuk menyimpan hasil eksperimen dan wordcloud (FR-1.10)
         os.makedirs('results/experiments', exist_ok=True)
         os.makedirs('results/wordclouds', exist_ok=True)
 
     def _run_kmeans(self, x, k):
-        """Metode internal untuk menjalankan 1 kali FAISS Spherical K-Means."""
+        """Jalankan 1 kali FAISS Spherical K-Means."""
         self.total_runs += 1
         
         clus = faiss.Clustering(self.d, k)
         clus.niter = self.niter
-        clus.spherical = True  # Mengunci koordinat pada permukaan bola (Hypersphere)
+        clus.spherical = True
         
-        # Menggunakan IndexFlatIP (Inner Product) karena data telah dinormalisasi L2
         index = faiss.IndexFlatIP(self.d)
         clus.train(x, index)
         
-        # Ekstrak centroid dan cari label untuk setiap data
         centroids = faiss.vector_to_array(clus.centroids).reshape(k, self.d)
         index_assign = faiss.IndexFlatIP(self.d)
         index_assign.add(centroids)
@@ -54,154 +53,194 @@ class RecursiveSphericalKMeans:
         return labels.flatten(), centroids
 
     def _calculate_intra_cosine_similarity(self, embeddings, labels, centroids):
-        """Menghitung rata-rata Cosine Similarity intra-klaster untuk kriteria Robust."""
+        """Rata-rata Cosine Similarity intra-klaster."""
         similarities = []
         for i in range(len(centroids)):
             cluster_data = embeddings[labels == i]
             if len(cluster_data) > 0:
-                # Dot product bernilai sama dengan Cosine Similarity karena vektor telah dinormalisasi L2
                 dot_products = np.dot(cluster_data, centroids[i])
                 similarities.append(np.mean(dot_products))
         return np.mean(similarities) if similarities else 0.0
 
     def _generate_wordcloud(self, texts, labels, filename_prefix):
-        """Otomatisasi pembuatan Word Cloud tunggal untuk memenuhi kriteria Explanatory."""
+        """Buat Word Cloud semua klaster dalam satu gambar dengan subplot."""
         unique_labels = np.unique(labels)
-        for label in unique_labels:
-            # Mengambil teks khusus klaster secara aman menggunakan list comprehension
-            cluster_texts = [texts[idx] for idx, lbl in enumerate(labels) if lbl == label]
+        n_clusters = len(unique_labels)
+        
+        # Tentukan layout grid subplot
+        # Jika klaster <= 3, susun horizontal. Lebih dari itu, pakai grid 2 kolom.
+        if n_clusters <= 3:
+            n_cols = n_clusters
+            n_rows = 1
+        else:
+            n_cols = 2
+            n_rows = math.ceil(n_clusters / n_cols)
+        
+        fig, axes = plt.subplots(
+            n_rows, n_cols,
+            figsize=(8 * n_cols, 4 * n_rows)
+        )
+        
+        # Normalisasi axes menjadi array 1D agar indexing konsisten
+        # (plt.subplots mengembalikan objek tunggal jika hanya 1 subplot)
+        if n_clusters == 1:
+            axes = [axes]
+        else:
+            axes = np.array(axes).flatten()
+        
+        for idx, label in enumerate(unique_labels):
+            ax = axes[idx]
+            
+            cluster_indices = np.where(labels == label)[0]
+            cluster_texts = [texts[i] for i in cluster_indices]
             combined_text = " ".join(cluster_texts)
             
             if not combined_text.strip():
+                ax.set_visible(False)
                 continue
-                
+            
             wordcloud = WordCloud(
-                width=800, 
-                height=400, 
+                width=800,
+                height=400,
                 background_color='white',
                 colormap='viridis',
                 max_words=50,
-                stopwords=self.masking_stopwords # Menyaring kata-kata masking kustom
+                stopwords=self.masking_stopwords
             ).generate(combined_text)
             
-            # Menyimpan berkas gambar tunggal ke direktori target secara mandiri
-            plt.figure(figsize=(10, 5))
-            plt.imshow(wordcloud, interpolation='bilinear')
-            plt.axis('off')
-            plt.tight_layout(pad=0)
-            plt.savefig(f"results/wordclouds/{filename_prefix}_c{label}.png", dpi=150)
-            plt.close()
+            ax.imshow(wordcloud, interpolation='bilinear')
+            ax.axis('off')
+            ax.set_title(
+                f"Klaster {label}  •  {len(cluster_indices)} tiket",
+                fontsize=13,
+                fontweight='bold',
+                pad=10
+            )
+        
+        # Sembunyikan subplot sisa jika jumlah klaster ganjil di grid 2 kolom
+        for idx in range(n_clusters, len(axes)):
+            axes[idx].set_visible(False)
+        
+        # Judul keseluruhan gambar
+        fig.suptitle(filename_prefix.replace('_', ' '), fontsize=15, fontweight='bold', y=1.01)
+        
+        plt.tight_layout()
+        plt.savefig(
+            f"results/wordclouds/{filename_prefix}.png",
+            dpi=150,
+            bbox_inches='tight'
+        )
+        plt.close()
 
     def fit_exhaustive_matrix(self, x, text_wordcloud_path):
         """
-        Menjalankan 486 kombinasi matriks skenario eksperimen secara penuh (Exhaustive):
-        Menguji kombinasi k1 (Level 1) dan k2 (Level 2) dari rentang 2 s.d 10 secara granular
-        tanpa merata-rata metrik Level 2 untuk pencatatan taksonomi yang presisi.
+        Menjalankan 486 kombinasi skenario eksperimen (k1 × k2 = 9 × 9 × k1 rekaman granular).
+        
+        Alur yang benar:
+          untuk setiap k1 (2–10):
+            bentuk k1 klaster dari seluruh data
+            untuk setiap cluster_id (0 s.d k1-1) yang terbentuk:
+              untuk setiap k2 (2–10):
+                sub-clustering subset klaster tersebut dengan k2
         """
         print("Memulai inisialisasi dan penguncian Normalisasi L2...")
         x_norm = np.ascontiguousarray(x.copy())
-        faiss.normalize_L2(x_norm) # Memproyeksikan data ke permukaan bola (Hypersphere)
+        faiss.normalize_L2(x_norm)
         
-        # Memuat HANYA berkas teks wordcloud yang relevan untuk kebutuhan visualisasi kata dominan
         with open(text_wordcloud_path, 'r', encoding='utf-8') as f:
             texts_wordcloud = [line.strip() for line in f.readlines() if line.strip()]
-            
-        # PENGAMAN SIMETRIS: Memastikan panjang list teks sama dengan jumlah baris matriks x (Mencegah IndexError)
-        if len(texts_wordcloud) != len(x_norm):
-            diff = len(x_norm) - len(texts_wordcloud)
-            if diff > 0:
-                texts_wordcloud.extend(["sapaan"] * diff)
-            else:
-                texts_wordcloud = texts_wordcloud[:len(x_norm)]
-            
+        
+        # Sinkronisasi panjang teks dengan jumlah data
+        assert len(texts_wordcloud) == len(x_norm), (
+            f"Jumlah teks wordcloud ({len(texts_wordcloud)}) "
+            f"≠ jumlah embedding ({len(x_norm)}). "
+            f"Pastikan kedua file dibuat dari DataFrame yang sama."
+        )
+        
         self.total_runs = 0
         matrix_records = []
         
-        print("\n=== Menjalankan Komputasi Matriks 486 Skenario Eksperimen (Recursive Spherical K-Means) ===")
+        print("\n=== Menjalankan Komputasi Matriks Skenario Eksperimen (Recursive Spherical K-Means) ===")
         
-        # LOOP LEVEL 1: Pembentukkan kelompok Kategori Utama (k rentang 2 s.d 10)
+        # ── LOOP LEVEL 1: bentuk k1 klaster dari seluruh data ──────────────────
         for k1 in self.k_range:
+            # KMeans L1 hanya dijalankan SEKALI per nilai k1
             labels_l1, centroids_l1 = self._run_kmeans(x_norm, k1)
+
+            if self.generate_wc_l1:
+                self._generate_wordcloud(texts=texts_wordcloud, labels=labels_l1, filename_prefix=f"L1_k1-{k1}")
             
-            # Menghitung metrik spasial evaluasi Level 1 (Menggunakan metrik 'cosine')
             sil_l1 = silhouette_score(x_norm, labels_l1, metric='cosine')
-            intra_sim_l1 = self._calculate_intra_cosine_similarity(x_norm, labels_l1, centroids_l1)
+            intra_sim_l1 = self._calculate_intra_cosine_similarity(
+                x_norm, labels_l1, centroids_l1
+            )
             
-            # Memverifikasi sebaran keanggotaan untuk Objective Ending Condition 2
-            counts_l1 = np.bincount(labels_l1, minlength=k1)
-            status_null_l1 = "Ada" if 0 in counts_l1 else "Aman"
+            counts_l1 = np.bincount(labels_l1.astype(int), minlength=k1)
+            status_null_l1 = "Ada" if np.any(counts_l1 == 0) else "Aman"
             
-            # Membuat Word Cloud unik untuk setiap klaster Level 1 yang terbentuk
-            # self._generate_wordcloud(texts_wordcloud, labels_l1, filename_prefix=f"L1_K{k1}")
-            
-            # LOOP LEVEL 2: Sub-clustering rekursif untuk tingkat Sub-kategori
-            for k2 in self.k_range:
-                for cluster_id in range(k1):
-                    # Isolasi koordinat fitur subset klaster induk saat ini
-                    mask = (labels_l1 == cluster_id)
-                    x_sub = x_norm[mask]
-                    sub_texts_wc = [texts_wordcloud[idx] for idx, flag in enumerate(mask) if flag]
-                    
-                    n_samples = len(x_sub)
-                    
-                    # KRITERIA HENTI (Objective Ending Condition 2): 
-                    # Jika jumlah data lebih kecil dari parameter k2 target, catat sebagai klaster null/singleton
+            # ── LOOP KLASTER: iterasi setiap klaster hasil L1 ──────────────────
+            for cluster_id in range(k1):
+                # Isolasi subset data milik klaster ini
+                indices_mask = np.where(labels_l1 == cluster_id)[0]
+                x_sub = x_norm[indices_mask]
+                sub_texts_wc = [texts_wordcloud[idx] for idx in indices_mask]
+                n_samples = len(x_sub)
+                
+                # ── LOOP LEVEL 2: uji semua nilai k2 pada subset klaster ini ───
+                for k2 in self.k_range:
+                    # Kondisi henti: data lebih sedikit dari target k2
                     if n_samples < k2:
                         matrix_records.append({
                             "Skenario K1 (L1)": k1,
                             "Skenario K2 (L2)": k2,
                             "Parent Cluster ID": cluster_id,
+                            "N Parent Cluster": n_samples,
                             "Silhouette Score L1": round(sil_l1, 4),
                             "Silhouette Score L2": -1.0,
                             "Intra-Cluster Cosine Sim L1": round(intra_sim_l1, 4),
                             "Intra-Cluster Cosine Sim L2": 0.0,
-                            "Total Objek Induk (n_parent)": n_samples,
                             "Status Kosong Level 1": status_null_l1,
                             "Status Kosong Level 2": "Null/Singleton (n < k2)"
                         })
                         continue
-                        
-                    # Eksekusi sub-clustering Level 2
-                    labels_l2, centroids_l2 = self._run_kmeans(x_sub, k2)
                     
-                    # Hitung Silhouette & Cosine Similarity sub-klaster level 2 secara murni
-                    if len(np.unique(labels_l2)) > 1:
+                    # Sub-clustering Level 2 pada subset klaster ini
+                    labels_l2, centroids_l2 = self._run_kmeans(x_sub, k2)
+
+                    if self.generate_wc_l2:
+                        self._generate_wordcloud(texts=sub_texts_wc, labels=labels_l2, filename_prefix=f"L2_k1-{k1}_parent-{cluster_id}_k2-{k2}")
+                    
+                    unique_l2 = np.unique(labels_l2)
+                    if n_samples >= 2 and len(unique_l2) > 1:
                         sil_sub = silhouette_score(x_sub, labels_l2, metric='cosine')
                     else:
                         sil_sub = -1.0
-                        
-                    intra_sub = self._calculate_intra_cosine_similarity(x_sub, labels_l2, centroids_l2)
                     
-                    # Membuat Word Cloud tunggal untuk setiap sub-klaster secara mandiri
-                    # self._generate_wordcloud(
-                    #     texts=sub_texts_wc, 
-                    #     labels=labels_l2, 
-                    #     filename_prefix=f"L2_K{k1}x{k2}_parent{cluster_id}"
-                    # )
+                    intra_sub = self._calculate_intra_cosine_similarity(
+                        x_sub, labels_l2, centroids_l2
+                    )
                     
-                    # PENCATATAN GRANULAR: Rekam data performa per cluster_id individu (Akumulasi total 486 baris)
                     matrix_records.append({
                         "Skenario K1 (L1)": k1,
                         "Skenario K2 (L2)": k2,
                         "Parent Cluster ID": cluster_id,
+                        "N Parent Cluster": n_samples,
                         "Silhouette Score L1": round(sil_l1, 4),
                         "Silhouette Score L2": round(sil_sub, 4),
                         "Intra-Cluster Cosine Sim L1": round(intra_sim_l1, 4),
                         "Intra-Cluster Cosine Sim L2": round(intra_sub, 4),
-                        "Total Objek Induk (n_parent)": n_samples,
                         "Status Kosong Level 1": status_null_l1,
                         "Status Kosong Level 2": "Aman"
                     })
-                
-            print(f"-> Skenario Level 1 k={k1} selesai dievaluasi untuk seluruh rentang variasi k2.")
-
-        # Ekspor kumpulan rekapitulasi data granular menjadi berkas .csv (FR-1.10)
+            
+            print(f"-> k1={k1}: {k1} klaster × 9 variasi k2 selesai dievaluasi.")
+        
         df_matrix = pd.DataFrame(matrix_records)
         output_csv_path = 'results/experiments/matriks_skenario_rekap_1.csv'
         df_matrix.to_csv(output_csv_path, index=False)
         
-        print(f"\nSelesai! Total eksekusi repositori matriks: {len(df_matrix)} rekaman skenario.")
-        print(f"Data rekapitulasi skenario kuantitatif disimpan di: '{output_csv_path}'")
-        print("Seluruh aset visualisasi Word Cloud disimpan di folder: 'results/wordclouds/'")
+        print(f"\nSelesai! Total eksekusi KMeans: {self.total_runs} kali.")
+        print(f"Total rekaman skenario: {len(df_matrix)} baris.")
+        print(f"Tersimpan di: '{output_csv_path}'")
         
         return matrix_records
