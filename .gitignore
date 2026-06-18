@@ -1,21 +1,8 @@
-# dataset
-dataset_0/
-*.csv
-*.json
-*.xml
-dataset/
-*.csv
-*.json
-*.xml
-
 # hasil
 hasil/
 *.csv
 *.json
 *.xml
-
-# datasets
-datasets/
 
 # results
 results/
