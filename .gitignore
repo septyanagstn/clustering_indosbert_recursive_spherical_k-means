@@ -6,6 +6,9 @@ hasil/
 
 # results
 results/
+datasets/
+dataset_0/
+_datasets/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
