@@ -1,14 +1,14 @@
-# dataset
-dataset/
-*.csv
-*.json
-*.xml
-
 # hasil
 hasil/
 *.csv
 *.json
 *.xml
+
+# results
+results/
+datasets/
+dataset_0/
+_datasets/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -217,3 +217,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+results.zip
